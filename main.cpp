@@ -1,4 +1,4 @@
-/* main.cpp - User-defined Display Limits & Instant Save (C++17)
+/* main.cpp - Display Limits in Queries & Course Listing (C++17)
    Compile: g++ -std=c++17 -O2 -pthread -Wall -Wextra -o erp main.cpp
 */
 #include <iostream>
@@ -545,8 +545,12 @@ int main(int argc, char **argv) {
                 CourseID demoC = courses[0]; 
                 cout << "Auto-selected course: " << to_string_variant(demoC) << "\n";
                 auto res = cidx.top_students_for_course(demoC, 9.0);
+                
+                size_t limit = get_user_display_limit();
+                if (limit == 0) limit = res.size();
+
                 cout << "Found " << res.size() << " students:\n";
-                for(size_t i=0; i<res.size() && i<10; ++i) {
+                for(size_t i=0; i<res.size() && i<limit; ++i) {
                      auto g = res[i]->grade_for_course(demoC);
                      cout << res[i]->get_name() << " : " << (g?*g:0.0) << "\n";
                 }
@@ -557,6 +561,17 @@ int main(int argc, char **argv) {
                 if (students.empty()) { cout << "Load data first.\n"; wait_for_enter(); break; }
                 if (!indexed) { cidx.build_from(students); indexed = true; }
                 
+                // --- Display available courses ---
+                cout << "\n--- Available Courses ---\n";
+                auto all_courses = cidx.get_all_courses();
+                for(size_t i=0; i<all_courses.size(); ++i) {
+                    cout << to_string_variant(all_courses[i]);
+                    if (i < all_courses.size() - 1) cout << ", ";
+                    if ((i+1) % 8 == 0) cout << "\n"; // Break line every 8 courses for readability
+                }
+                cout << "\n-------------------------\n";
+                // ---------------------------------
+
                 cout << "Enter course ID: "; cout.flush();
                 string c_in; getline(cin, c_in);
                 CourseID cid;
@@ -568,8 +583,12 @@ int main(int argc, char **argv) {
                 try { g_val = stod(g_in); } catch(...) {}
                 
                 auto res = cidx.top_students_for_course(cid, g_val);
+                
+                size_t limit = get_user_display_limit();
+                if (limit == 0) limit = res.size();
+
                 cout << "Found " << res.size() << " students.\n";
-                for(size_t i=0; i<res.size() && i<20; ++i) {
+                for(size_t i=0; i<res.size() && i<limit; ++i) {
                      cout << res[i]->brief() << "\n";
                 }
                 wait_for_enter();
