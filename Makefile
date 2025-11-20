@@ -1,62 +1,46 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -O2 -pthread -Wall -Wextra
 
-TARGET = erp
-SRC = main.cpp
-
-GEN = gen_students
-GEN_SRC = gen_students.cpp
-
-.PHONY: all build_all gen gen50 gen3000 demo quick clean
+# List of object files needed for the main program
+OBJS = main.o Student.o InputValidator.o ERPUtils.o CourseIndex.o
 
 # Default target
-all: $(TARGET)
+all: erp gen_students
 
-# Build main ERP program
-$(TARGET): $(SRC)
-	@echo "Building ERP system..."
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SRC)
-	@echo "Build complete!"
+# Main executable linkage
+erp: $(OBJS)
+	$(CXX) $(CXXFLAGS) -o erp $(OBJS)
 
-# Build student generator
-$(GEN): $(GEN_SRC)
-	@echo "Building student generator..."
-	$(CXX) $(CXXFLAGS) -o $(GEN) $(GEN_SRC)
-	@echo "Generator build complete!"
+# Generator executable
+gen_students: gen_students.cpp
+	$(CXX) $(CXXFLAGS) -o gen_students gen_students.cpp
 
-# Build everything
-build_all: $(TARGET) $(GEN)
-	@echo "All builds complete!"
+# Individual File Compilations
+main.o: main.cpp Types.h Student.h InputValidator.h ERPUtils.h CourseIndex.h
+	$(CXX) $(CXXFLAGS) -c main.cpp
 
-# Generate students
-gen: $(GEN)
-	@echo "Generating 3000 students..."
-	./$(GEN) 3000
-	@echo "Generated students.csv"
+Student.o: Student.cpp Student.h Types.h
+	$(CXX) $(CXXFLAGS) -c Student.cpp
 
-gen50: $(GEN)
-	@echo "Generating 50 students..."
-	./$(GEN) 50
-	@echo "Generated students.csv"
+InputValidator.o: InputValidator.cpp InputValidator.h Types.h
+	$(CXX) $(CXXFLAGS) -c InputValidator.cpp
 
-gen3000: gen
+ERPUtils.o: ERPUtils.cpp ERPUtils.h Student.h InputValidator.h
+	$(CXX) $(CXXFLAGS) -c ERPUtils.cpp
 
-# Quick demo (auto-run with small dataset)
-quick: build_all gen50
-	@echo "\n========================================="
-	@echo "Running quick demo with 50 students..."
-	@echo "========================================="
-	./$(TARGET) students.csv
+CourseIndex.o: CourseIndex.cpp CourseIndex.h Student.h
+	$(CXX) $(CXXFLAGS) -c CourseIndex.cpp
 
-# Full demo (auto-run with 3000 students)
-demo: build_all gen
-	@echo "\n========================================="
-	@echo "Running full demo with 3000 students..."
-	@echo "========================================="
-	./$(TARGET) students.csv
-
-# Clean all generated files
+# Clean up
 clean:
-	@echo "Cleaning..."
-	rm -f $(TARGET) $(GEN) students.csv sorted_indices.txt *.o
-	@echo "Clean complete!"
+	rm -f erp gen_students *.o students.csv
+
+# Quick Demo (50 Students)
+quick: all
+	./gen_students 50
+	./erp students.csv
+
+# Full Demo (3000 Students)
+demo: all
+	./gen_students 3000
+	./erp students.csv

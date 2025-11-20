@@ -1,322 +1,16 @@
-/* main.cpp - Final Version: Removed Demo Option, Delete is #11 (C++17)
-   Compile: g++ -std=c++17 -O2 -pthread -Wall -Wextra -o erp main.cpp
-*/
+/* main.cpp - Modularized Entry Point */
 #include <iostream>
 #include <vector>
-#include <string>
-#include <variant>
-#include <thread>
-#include <chrono>
-#include <fstream>
-#include <sstream>
-#include <set>
-#include <algorithm>
-#include <unordered_map>
-#include <optional>
 #include <numeric>
-#include <iomanip>
-#include <cctype>
-#include <limits>
-#include <cstdlib> 
+#include <algorithm>
+#include <cstdlib>
+#include "Types.h"
+#include "Student.h"
+#include "CourseIndex.h"
+#include "InputValidator.h"
+#include "ERPUtils.h"
 
 using namespace std;
-using clk = chrono::high_resolution_clock;
-
-// Flexible types
-using RollID = variant<uint64_t, string>;
-using CourseID = variant<int, string>;
-using Grade = double;
-
-// Variant -> string helpers
-string to_string_variant(const RollID &r) {
-    if (holds_alternative<uint64_t>(r)) return to_string(get<uint64_t>(r));
-    return get<string>(r);
-}
-string to_string_variant(const CourseID &c) {
-    if (holds_alternative<int>(c)) return to_string(get<int>(c));
-    return get<string>(c);
-}
-
-// CourseID hashing & equality for unordered_map
-struct CourseIDHash {
-    size_t operator()(const CourseID &c) const noexcept {
-        if (holds_alternative<int>(c))
-            return hash<int>()(get<int>(c)) ^ 0x9e3779b97f4a7c15ULL;
-        return hash<string>()(get<string>(c));
-    }
-};
-struct CourseIDEq {
-    bool operator()(const CourseID &a, const CourseID &b) const noexcept {
-        if (a.index() != b.index()) return false;
-        if (holds_alternative<int>(a)) return get<int>(a) == get<int>(b);
-        return get<string>(a) == get<string>(b);
-    }
-};
-
-// Student class
-class Student {
-private:
-    RollID roll;
-    string name;
-    string branch;
-    int startYear;
-    vector<pair<CourseID, Grade>> courses;
-    vector<pair<CourseID, Grade>> prevCourses;
-
-public:
-    Student() = default;
-    Student(RollID r, string n, string br, int sy)
-        : roll(move(r)), name(move(n)), branch(move(br)), startYear(sy) {}
-
-    void add_course(const CourseID &c, Grade g, bool current = true) {
-        if (current) courses.emplace_back(c, g);
-        else prevCourses.emplace_back(c, g);
-    }
-
-    const RollID& get_roll() const { return roll; }
-    const string& get_name() const { return name; }
-    const string& get_branch() const { return branch; }
-    int get_startYear() const { return startYear; }
-    const vector<pair<CourseID, Grade>>& get_courses() const { return courses; }
-    const vector<pair<CourseID, Grade>>& get_prevCourses() const { return prevCourses; }
-
-    optional<Grade> grade_for_course(const CourseID &c) const {
-        for (auto &p : courses)
-            if (CourseIDEq{}(p.first, c)) return p.second;
-        for (auto &p : prevCourses)
-            if (CourseIDEq{}(p.first, c)) return p.second;
-        return nullopt;
-    }
-
-    string brief() const {
-        stringstream ss;
-        ss << "[" << to_string_variant(roll) << "] " << name
-           << " (" << branch << ", " << startYear << ")";
-        return ss.str();
-    }
-    
-    string full_display() const {
-        stringstream ss;
-        ss << brief() << "\n  Current courses:\n";
-        for (auto &p : courses)
-            ss << "    " << to_string_variant(p.first) << " : " << fixed << setprecision(1) << p.second << "\n";
-        ss << "  Previous courses:\n";
-        for (auto &p : prevCourses)
-            ss << "    " << to_string_variant(p.first) << " : " << fixed << setprecision(1) << p.second << "\n";
-        return ss.str();
-    }
-};
-
-// Comparator that sorts indices by student name then roll-string
-struct IndexComparator {
-    const vector<Student>& students;
-    IndexComparator(const vector<Student> &s) : students(s) {}
-    bool operator()(size_t a, size_t b) const {
-        const Student &A = students[a];
-        const Student &B = students[b];
-        if (A.get_name() != B.get_name()) return A.get_name() < B.get_name();
-        return to_string_variant(A.get_roll()) < to_string_variant(B.get_roll());
-    }
-};
-
-// Utilities
-string trim(const string &s) {
-    size_t a = 0, b = s.size();
-    while (a < b && isspace((unsigned char)s[a])) ++a;
-    while (b > a && isspace((unsigned char)s[b-1])) --b;
-    return s.substr(a, b - a);
-}
-bool looks_like_uint64(const string &s) {
-    if (s.empty()) return false;
-    for (char c : s) if (!isdigit((unsigned char)c)) return false;
-    return true;
-}
-bool looks_like_int(const string &s) {
-    if (s.empty()) return false;
-    size_t start = 0;
-    if (s[0] == '-') start = 1;
-    if (start >= s.size()) return false;
-    for (size_t i = start; i < s.size(); ++i) if (!isdigit((unsigned char)s[i])) return false;
-    return true;
-}
-
-// parse semicolon-separated course:grade tokens
-vector<pair<CourseID, Grade>> parse_course_list(const string &s) {
-    vector<pair<CourseID, Grade>> out;
-    stringstream ss(s);
-    string token;
-    while (getline(ss, token, ';')) {
-        token = trim(token);
-        if (token.empty()) continue;
-        auto pos = token.find(':');
-        if (pos == string::npos) continue;
-        string cstr = trim(token.substr(0, pos));
-        string gstr = trim(token.substr(pos + 1));
-        Grade g = 0;
-        try { g = stod(gstr); } catch (...) { g = 0; }
-        CourseID cid = looks_like_int(cstr) ? CourseID(stoi(cstr)) : CourseID(cstr);
-        out.emplace_back(cid, g);
-    }
-    return out;
-}
-
-// load CSV rows
-size_t load_csv(const string &filename, vector<Student> &students, size_t max_records = 0) {
-    ifstream ifs(filename);
-    if (!ifs.is_open()) return 0;
-    string line;
-    size_t cnt = 0;
-    while (getline(ifs, line)) {
-        if (line.empty()) continue;
-        vector<string> fields;
-        string tmp;
-        stringstream ss(line);
-        while (getline(ss, tmp, ',')) fields.push_back(trim(tmp));
-        if (fields.size() < 4) continue;
-        while (fields.size() < 6) fields.push_back("");
-        try {
-            RollID rid = looks_like_uint64(fields[0]) ? RollID((uint64_t)stoull(fields[0])) : RollID(fields[0]);
-            string name = fields[1];
-            string branch = fields[2];
-            int startYear = 2020;
-            try { startYear = stoi(fields[3]); } catch (...) {}
-            Student s(rid, name, branch, startYear);
-            for (auto &p : parse_course_list(fields[4])) s.add_course(p.first, p.second, true);
-            if (!fields[5].empty()) for (auto &p : parse_course_list(fields[5])) s.add_course(p.first, p.second, false);
-            students.push_back(move(s));
-            ++cnt;
-            if (max_records && cnt >= max_records) break;
-        } catch (...) {
-            continue;
-        }
-    }
-    return cnt;
-}
-
-// --- PERSISTENCE HELPERS ---
-
-// Write a single student to a stream (helper)
-void write_student_to_stream(ostream& ofs, const Student& s) {
-    ofs << to_string_variant(s.get_roll()) << ",";
-    ofs << s.get_name() << ",";
-    ofs << s.get_branch() << ",";
-    ofs << s.get_startYear() << ",";
-    
-    const auto& curr = s.get_courses();
-    for(size_t i=0; i<curr.size(); ++i) {
-        if (i > 0) ofs << ";";
-        ofs << to_string_variant(curr[i].first) << ":" << fixed << setprecision(1) << curr[i].second;
-    }
-    ofs << ",";
-    
-    const auto& prev = s.get_prevCourses();
-    for(size_t i=0; i<prev.size(); ++i) {
-        if (i > 0) ofs << ";";
-        ofs << to_string_variant(prev[i].first) << ":" << fixed << setprecision(1) << prev[i].second;
-    }
-    ofs << "\n";
-}
-
-// Append one student
-void append_student_to_csv(const Student& s, const string& filename) {
-    ofstream ofs(filename, ios::app); 
-    if (!ofs.is_open()) {
-        cerr << "Error: Could not write to " << filename << "\n";
-        return;
-    }
-    write_student_to_stream(ofs, s);
-    ofs.close();
-}
-
-// Overwrite entire file (for Deletion)
-void save_all_students_to_csv(const vector<Student>& students, const string& filename) {
-    ofstream ofs(filename, ios::trunc); // Truncate clears the file
-    if (!ofs.is_open()) {
-        cerr << "Error: Could not write to " << filename << "\n";
-        return;
-    }
-    for(const auto& s : students) {
-        write_student_to_stream(ofs, s);
-    }
-    ofs.close();
-}
-
-struct ThreadTimer { long long duration_ms = 0; };
-
-// parallel sort indices
-void parallel_sort_indices(vector<size_t>& indices, const vector<Student> &students, ThreadTimer &t1, ThreadTimer &t2) {
-    if (indices.empty()) return;
-    size_t n = indices.size();
-    if (n <= 1) return;
-    size_t mid = n / 2;
-    IndexComparator comp(students);
-    auto worker1 = [&]() {
-        auto st = clk::now();
-        sort(indices.begin(), indices.begin() + mid, comp);
-        auto ed = clk::now();
-        t1.duration_ms = chrono::duration_cast<chrono::milliseconds>(ed - st).count();
-    };
-    auto worker2 = [&]() {
-        auto st = clk::now();
-        sort(indices.begin() + mid, indices.end(), comp);
-        auto ed = clk::now();
-        t2.duration_ms = chrono::duration_cast<chrono::milliseconds>(ed - st).count();
-    };
-    thread th1(worker1), th2(worker2);
-    th1.join(); th2.join();
-    inplace_merge(indices.begin(), indices.begin() + mid, indices.end(), comp);
-}
-
-// CourseIndex: map from CourseID -> sorted vector<Student*>
-class CourseIndex {
-private:
-    unordered_map<CourseID, vector<Student*>, CourseIDHash, CourseIDEq> idx;
-public:
-    void build_from(vector<Student> &students) {
-        idx.clear();
-        for (auto &s : students) {
-            for (auto &p : s.get_courses()) idx[p.first].push_back(&s);
-            for (auto &p : s.get_prevCourses()) idx[p.first].push_back(&s);
-        }
-        for (auto &kv : idx) {
-            CourseID course = kv.first;
-            auto &vec = kv.second;
-            sort(vec.begin(), vec.end(), [&](const Student* A, const Student* B) {
-                auto ga = A->grade_for_course(course);
-                auto gb = B->grade_for_course(course);
-                if (ga && gb) {
-                    if (*ga != *gb) return *ga > *gb;
-                    return to_string_variant(A->get_roll()) < to_string_variant(B->get_roll());
-                }
-                if (ga) return true;
-                if (gb) return false;
-                return to_string_variant(A->get_roll()) < to_string_variant(B->get_roll());
-            });
-            vec.erase(unique(vec.begin(), vec.end()), vec.end());
-        }
-    }
-
-    vector<Student*> top_students_for_course(const CourseID &c, Grade threshold) {
-        vector<Student*> out;
-        auto it = idx.find(c);
-        if (it == idx.end()) return out;
-        for (auto s : it->second) {
-            auto g = s->grade_for_course(c);
-            if (g && *g >= threshold) out.push_back(s);
-            else break;
-        }
-        return out;
-    }
-
-    vector<CourseID> get_all_courses() const {
-        vector<CourseID> courses;
-        for (auto &kv : idx) courses.push_back(kv.first);
-        sort(courses.begin(), courses.end(), [](const CourseID &a, const CourseID &b){
-            return to_string_variant(a) < to_string_variant(b);
-        });
-        return courses;
-    }
-};
 
 void displayMenu() {
     cout << "\n";
@@ -344,19 +38,6 @@ void displayMenu() {
     cout << "||    11. DELETE STUDENT (Permanent)                                     ||" << endl;
     cout << "||    0. Exit                                                            ||" << endl;
     cout << "||=======================================================================||" << endl;
-    cout << "Enter your choice: ";
-    cout.flush();
-}
-
-optional<int> read_choice_from_line(const string &line) {
-    string s = trim(line);
-    if (s.empty()) return nullopt;
-    try {
-        size_t pos = 0;
-        int v = stoi(s, &pos);
-        if (pos != s.size()) return nullopt;
-        return v;
-    } catch (...) { return nullopt; }
 }
 
 void wait_for_enter() {
@@ -366,321 +47,177 @@ void wait_for_enter() {
     getline(cin, tmp);
 }
 
-size_t get_user_display_limit() {
-    cout << "How many records to display? (0 for All): ";
-    cout.flush();
-    string s; 
-    getline(cin, s);
-    try {
-        return (size_t)stoi(s);
-    } catch(...) {
-        return 0;
-    }
-}
-
-// Helper to manually add student
+// Helpers moved from monolithic main
 void manual_add_student(vector<Student>& students, bool iiit_mode) {
     if (students.empty()) {
-        cout << "Note: Loading existing students.csv first to ensure consistency...\n";
-        load_csv("students.csv", students);
+        cout << "Note: Loading existing students.csv first...\n";
+        ERPUtils::load_csv("students.csv", students);
     }
-
     cout << "\n--- Manual Student Creation ---\n";
-    cout << "Please enter ALL student details.\n";
-
-    string name, branch, roll_str, year_str;
     
-    // 1. Roll Number
-    RollID r;
-    if (iiit_mode) {
-        cout << "Roll No (Integer, e.g., 2019001): "; getline(cin, roll_str);
-        try { r = (uint64_t)stoull(roll_str); } catch(...) { r = (uint64_t)0; }
-    } else {
-        cout << "Roll No (String, e.g., MT19001): "; getline(cin, roll_str);
-        r = roll_str;
-    }
-
-    // 2. Basic Info
-    cout << "Name: "; getline(cin, name);
-    cout << "Branch: "; getline(cin, branch);
-    cout << "Start Year (e.g. 2023): "; getline(cin, year_str);
-    int year = 2023;
-    try { year = stoi(year_str); } catch(...) {}
+    RollID r = InputValidator::readRollID(iiit_mode);
+    string name = InputValidator::readString("Name: ");
+    string branch = InputValidator::readString("Branch: ");
+    int year = InputValidator::readYear("Start Year (YYYY): "); // Uses new 4-digit check
 
     Student s(r, name, branch, year);
     
-    // 3. Current Courses Loop
+    // Add courses loop logic...
     cout << "--- Adding CURRENT Courses (Type 'done' to finish) ---\n";
     while(true) {
-        string course_str, grade_str;
-        if (iiit_mode) cout << "Current Course Code (String, e.g. CS101) [or 'done']: ";
-        else cout << "Current Course Code (Integer, e.g. 101) [or 'done']: ";
+        string prompt = iiit_mode ? "Current Code (String): " : "Current Code (Int): ";
+        string input = InputValidator::readCourseStringOrDone(prompt);
+        if (input == "done" || input == "") break;
         
-        getline(cin, course_str);
-        if (trim(course_str) == "done" || trim(course_str) == "") break;
-
         CourseID c;
-        if (iiit_mode) c = course_str;
+        if (iiit_mode) c = input;
         else {
-             try { c = stoi(course_str); } catch(...) { 
-                 // Fallback if user types string in IIT mode
-                 c = course_str; 
-             }
+             try { c = stoi(input); } catch(...) { c = input; }
         }
-
-        cout << "  Grade (e.g. 9.0): "; getline(cin, grade_str);
-        double g = 0.0;
-        try { g = stod(grade_str); } catch(...) {}
-        s.add_course(c, g, true); // true = current
+        double g = InputValidator::readDouble("  Grade (0.0-10.0): ");
+        s.add_course(c, g, true);
     }
-
-    // 4. Previous Courses Loop
+    
     cout << "--- Adding PREVIOUS Courses (Type 'done' to finish) ---\n";
     while(true) {
-        string course_str, grade_str;
-        if (iiit_mode) cout << "Previous Course Code (String) [or 'done']: ";
-        else cout << "Previous Course Code (Integer) [or 'done']: ";
-        
-        getline(cin, course_str);
-        if (trim(course_str) == "done" || trim(course_str) == "") break;
-
+        string input = InputValidator::readCourseStringOrDone("Previous Code: ");
+        if (input == "done" || input == "") break;
         CourseID c;
-        if (iiit_mode) c = course_str;
+        if (iiit_mode) c = input;
         else {
-             try { c = stoi(course_str); } catch(...) { c = course_str; }
+             try { c = stoi(input); } catch(...) { c = input; }
         }
-
-        cout << "  Grade (e.g. 8.5): "; getline(cin, grade_str);
-        double g = 0.0;
-        try { g = stod(grade_str); } catch(...) {}
-        s.add_course(c, g, false); // false = previous
+        double g = InputValidator::readDouble("  Grade (0.0-10.0): ");
+        s.add_course(c, g, false);
     }
-    
-    students.push_back(s); 
-    append_student_to_csv(s, "students.csv");
-    
-    cout << "Student added to memory and appended to students.csv!\n";
+
+    students.push_back(s);
+    ERPUtils::append_student_to_csv(s, "students.csv");
+    cout << "Student saved!\n";
     wait_for_enter();
 }
 
-// Delete student
 void delete_student(vector<Student>& students) {
-    if (students.empty()) {
-        cout << "Loading data to ensure accurate deletion...\n";
-        load_csv("students.csv", students);
-    }
-
+    if (students.empty()) ERPUtils::load_csv("students.csv", students);
     cout << "\n--- DELETE STUDENT ---\n";
-    cout << "Enter Roll Number to Delete: ";
-    cout.flush();
-    string roll_in; 
-    getline(cin, roll_in);
-    roll_in = trim(roll_in);
+    string roll_in = InputValidator::readString("Enter Roll Number: ");
 
     auto it = find_if(students.begin(), students.end(), [&](const Student& s) {
-        string s_roll = to_string_variant(s.get_roll());
-        return s_roll == roll_in;
+        return to_string_variant(s.get_roll()) == roll_in;
     });
 
     if (it != students.end()) {
-        cout << "Found student: " << it->brief() << "\n";
-        cout << "Are you sure you want to PERMANENTLY delete? (y/n): ";
-        string confirm; getline(cin, confirm);
-        if (trim(confirm) == "y" || trim(confirm) == "Y") {
+        cout << "Found: " << it->brief() << "\n";
+        string confirm = InputValidator::readString("Delete Permanently? (y/n): ");
+        if (confirm == "y" || confirm == "Y") {
             students.erase(it);
-            save_all_students_to_csv(students, "students.csv");
-            cout << "Student deleted and file updated.\n";
-        } else {
-            cout << "Deletion cancelled.\n";
+            ERPUtils::save_all_students_to_csv(students, "students.csv");
+            cout << "Deleted.\n";
         }
     } else {
-        cout << "Student with roll number '" << roll_in << "' not found.\n";
+        cout << "Not found.\n";
     }
     wait_for_enter();
 }
 
-int main(int argc, char **argv) {
-    (void)argc; (void)argv; 
-    
+int main() {
     string csv_file = "students.csv";
     vector<Student> students;
-    // Indices
-    vector<size_t> input_order;
-    vector<size_t> sorted_indices;
+    vector<size_t> sorted_indices, input_order;
     CourseIndex cidx;
-    bool sorted = false;
-    bool indexed = false;
+    bool sorted = false, indexed = false;
 
-    string line;
     while (true) {
         displayMenu();
-        
-        if (!getline(cin, line)) break;
-        auto opt = read_choice_from_line(line);
-        if (!opt) {
-            cout << "Invalid input.\n";
-            wait_for_enter();
-            continue;
-        }
-        int choice = *opt;
-        if (choice == 0) { cout << "\nExiting system. Goodbye!\n"; break; }
+        int choice = InputValidator::readMenuChoice(0, 11);
+        if (choice == 0) break;
 
         switch (choice) {
             case 1: manual_add_student(students, true); break;
             case 2: manual_add_student(students, false); break;
-            
             case 3: {
-                if (students.empty()) {
-                    cout << "Loading data from CSV first...\n";
-                    load_csv(csv_file, students);
-                }
-                size_t limit = get_user_display_limit();
+                if (students.empty()) ERPUtils::load_csv(csv_file, students);
+                size_t limit = InputValidator::readDisplayLimit();
                 if (limit == 0) limit = students.size();
-                
-                cout << "\n--- All Students (Both Universities) ---\n";
-                cout << "Total Records: " << students.size() << "\n";
-                for(size_t i=0; i<students.size() && i<limit; ++i) {
+                cout << "Total: " << students.size() << "\n";
+                for(size_t i=0; i<students.size() && i<limit; ++i)
                     cout << (i+1) << ". " << students[i].brief() << "\n";
-                }
                 wait_for_enter();
                 break;
             }
-
-            case 4: {
-                cout << "Generating 3000 records via gen_students...\n";
-                int ret = system("./gen_students 3000");
-                if (ret != 0) cout << "Error running gen_students.\n";
-                else cout << "Generation complete.\n";
-                wait_for_enter();
+            case 4: 
+                system("./gen_students 3000"); 
+                wait_for_enter(); 
                 break;
-            }
-            case 5: {
-                cout << "Loading " << csv_file << "...\n";
-                students.clear();
-                size_t n = load_csv(csv_file, students);
-                cout << "Loaded " << n << " records.\n";
-                wait_for_enter();
+            case 5: 
+                students.clear(); 
+                cout << "Loaded " << ERPUtils::load_csv(csv_file, students) << " records.\n"; 
+                wait_for_enter(); 
                 break;
-            }
             case 6: {
-                if (students.empty()) { cout << "Load students first (Option 5).\n"; wait_for_enter(); break; }
-                
+                if (students.empty()) { cout << "Load first.\n"; wait_for_enter(); break; }
                 sorted_indices.resize(students.size());
                 iota(sorted_indices.begin(), sorted_indices.end(), 0);
-                
-                cout << "Performing parallel sort...\n";
                 ThreadTimer t1, t2;
-                auto st = clk::now();
-                parallel_sort_indices(sorted_indices, students, t1, t2);
-                auto en = clk::now();
-                auto total = chrono::duration_cast<chrono::milliseconds>(en - st).count();
-                cout << "Thread 1: " << t1.duration_ms << "ms, Thread 2: " << t2.duration_ms << "ms\n";
-                cout << "Total Sort Time: " << total << "ms\n";
+                ERPUtils::parallel_sort_indices(sorted_indices, students, t1, t2);
+                cout << "T1: " << t1.duration_ms << "ms, T2: " << t2.duration_ms << "ms\n";
                 sorted = true;
                 wait_for_enter();
                 break;
             }
-
             case 7: {
-                if (students.empty()) { cout << "No data loaded.\n"; wait_for_enter(); break; }
+                if (students.empty()) { cout << "No data.\n"; wait_for_enter(); break; }
                 input_order.resize(students.size());
                 iota(input_order.begin(), input_order.end(), 0);
-
-                size_t limit = get_user_display_limit();
-                if (limit == 0) limit = input_order.size();
-                
-                cout << "\n--- Insertion Order ---\n";
-                for(size_t i=0; i<input_order.size() && i<limit; ++i) {
+                size_t limit = InputValidator::readDisplayLimit();
+                if (limit==0) limit = input_order.size();
+                for(size_t i=0; i<input_order.size() && i<limit; ++i)
                     cout << (i+1) << ". " << students[input_order[i]].brief() << "\n";
-                }
                 wait_for_enter();
                 break;
             }
             case 8: {
-                if (!sorted) { cout << "Please sort first (Option 6).\n"; wait_for_enter(); break; }
-                
-                size_t limit = get_user_display_limit();
-                if (limit == 0) limit = sorted_indices.size();
-
-                cout << "\n--- Sorted Order ---\n";
-                for(size_t i=0; i<sorted_indices.size() && i<limit; ++i) {
+                if (!sorted) { cout << "Sort first.\n"; wait_for_enter(); break; }
+                size_t limit = InputValidator::readDisplayLimit();
+                if (limit==0) limit = sorted_indices.size();
+                for(size_t i=0; i<sorted_indices.size() && i<limit; ++i)
                     cout << (i+1) << ". " << students[sorted_indices[i]].brief() << "\n";
-                }
                 wait_for_enter();
                 break;
             }
-
-            case 9: {
-                if (students.empty()) { cout << "Load data first.\n"; wait_for_enter(); break; }
-                if (!indexed) { cidx.build_from(students); indexed = true; }
-                
-                cout << "Querying: Course contains 'CS' or '101' and Grade >= 9.0\n";
-                auto courses = cidx.get_all_courses();
-                if (courses.empty()) { cout << "No courses.\n"; break; }
-                
-                CourseID demoC = courses[0]; 
-                cout << "Auto-selected course: " << to_string_variant(demoC) << "\n";
-                auto res = cidx.top_students_for_course(demoC, 9.0);
-                
-                size_t limit = get_user_display_limit();
-                if (limit == 0) limit = res.size();
-
-                cout << "Found " << res.size() << " students:\n";
-                for(size_t i=0; i<res.size() && i<limit; ++i) {
-                     auto g = res[i]->grade_for_course(demoC);
-                     cout << res[i]->get_name() << " : " << (g?*g:0.0) << "\n";
-                }
-                wait_for_enter();
-                break;
-            }
+            case 9: // Fallthrough to 10 logic for simplicity or keep distinct
             case 10: {
                 if (students.empty()) { cout << "Load data first.\n"; wait_for_enter(); break; }
                 if (!indexed) { cidx.build_from(students); indexed = true; }
                 
-                cout << "\n--- Available Courses ---\n";
-                auto all_courses = cidx.get_all_courses();
-                for(size_t i=0; i<all_courses.size(); ++i) {
-                    cout << to_string_variant(all_courses[i]);
-                    if (i < all_courses.size() - 1) cout << ", ";
-                    if ((i+1) % 8 == 0) cout << "\n"; 
+                if (choice == 10) {
+                     cout << "--- Available Courses ---\n";
+                     auto ac = cidx.get_all_courses();
+                     for(auto& c : ac) cout << to_string_variant(c) << " ";
+                     cout << "\n";
                 }
-                cout << "\n-------------------------\n";
 
-                cout << "Enter course ID: "; cout.flush();
-                string c_in; getline(cin, c_in);
+                string c_in = (choice == 9) ? "CS101" : InputValidator::readString("Enter Course ID: ");
+                // Auto-detect int vs string for CourseID
                 CourseID cid;
-                if (looks_like_int(c_in)) cid = stoi(c_in); else cid = c_in;
+                try { cid = stoi(c_in); } catch(...) { cid = c_in; } // Simple auto-detection
                 
-                cout << "Min Grade: "; cout.flush();
-                string g_in; getline(cin, g_in);
-                double g_val = 8.0;
-                try { g_val = stod(g_in); } catch(...) {}
+                double g = (choice == 9) ? 9.0 : InputValidator::readDouble("Min Grade: ");
+                auto res = cidx.top_students_for_course(cid, g);
                 
-                auto res = cidx.top_students_for_course(cid, g_val);
-                
-                size_t limit = get_user_display_limit();
-                if (limit == 0) limit = res.size();
-
+                size_t limit = InputValidator::readDisplayLimit();
+                if(limit==0) limit = res.size();
                 cout << "Found " << res.size() << " students.\n";
-                for(size_t i=0; i<res.size() && i<limit; ++i) {
-                     cout << res[i]->brief() << "\n";
-                }
+                for(size_t i=0; i<res.size() && i<limit; ++i)
+                    cout << res[i]->brief() << " [" << *(res[i]->grade_for_course(cid)) << "]\n";
                 wait_for_enter();
                 break;
             }
-
-            case 11: {
-                delete_student(students);
-                // Invalidate indices after delete
-                sorted = false;
-                indexed = false;
+            case 11: 
+                delete_student(students); 
+                sorted = false; indexed = false; 
                 break;
-            }
-
-            default:
-                cout << "Invalid choice.\n";
         }
     }
-
     return 0;
 }
