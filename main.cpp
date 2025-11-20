@@ -1,4 +1,4 @@
-/* main.cpp - Display Limits in Queries & Course Listing (C++17)
+/* main.cpp - Final Version: Removed Demo Option, Delete is #11 (C++17)
    Compile: g++ -std=c++17 -O2 -pthread -Wall -Wextra -o erp main.cpp
 */
 #include <iostream>
@@ -193,14 +193,10 @@ size_t load_csv(const string &filename, vector<Student> &students, size_t max_re
     return cnt;
 }
 
-// Helper to append a student to the CSV file immediately
-void append_student_to_csv(const Student& s, const string& filename) {
-    ofstream ofs(filename, ios::app); // Append mode
-    if (!ofs.is_open()) {
-        cerr << "Error: Could not write to " << filename << "\n";
-        return;
-    }
-    
+// --- PERSISTENCE HELPERS ---
+
+// Write a single student to a stream (helper)
+void write_student_to_stream(ostream& ofs, const Student& s) {
     ofs << to_string_variant(s.get_roll()) << ",";
     ofs << s.get_name() << ",";
     ofs << s.get_branch() << ",";
@@ -219,6 +215,29 @@ void append_student_to_csv(const Student& s, const string& filename) {
         ofs << to_string_variant(prev[i].first) << ":" << fixed << setprecision(1) << prev[i].second;
     }
     ofs << "\n";
+}
+
+// Append one student
+void append_student_to_csv(const Student& s, const string& filename) {
+    ofstream ofs(filename, ios::app); 
+    if (!ofs.is_open()) {
+        cerr << "Error: Could not write to " << filename << "\n";
+        return;
+    }
+    write_student_to_stream(ofs, s);
+    ofs.close();
+}
+
+// Overwrite entire file (for Deletion)
+void save_all_students_to_csv(const vector<Student>& students, const string& filename) {
+    ofstream ofs(filename, ios::trunc); // Truncate clears the file
+    if (!ofs.is_open()) {
+        cerr << "Error: Could not write to " << filename << "\n";
+        return;
+    }
+    for(const auto& s : students) {
+        write_student_to_stream(ofs, s);
+    }
     ofs.close();
 }
 
@@ -322,7 +341,7 @@ void displayMenu() {
     cout << "||    9. Query Students (Grade >= 9 in specific course)                  ||" << endl;
     cout << "||    10. Custom Query (Choose course and grade threshold)               ||" << endl;
     cout << "||=======================================================================||" << endl;
-    cout << "||    11. Run All Demonstrations (Full Assignment Demo)                  ||" << endl;
+    cout << "||    11. DELETE STUDENT (Permanent)                                     ||" << endl;
     cout << "||    0. Exit                                                            ||" << endl;
     cout << "||=======================================================================||" << endl;
     cout << "Enter your choice: ";
@@ -347,7 +366,6 @@ void wait_for_enter() {
     getline(cin, tmp);
 }
 
-// Get user limit for display
 size_t get_user_display_limit() {
     cout << "How many records to display? (0 for All): ";
     cout.flush();
@@ -360,7 +378,7 @@ size_t get_user_display_limit() {
     }
 }
 
-// Helper to manually add student and persist to CSV
+// Helper to manually add student
 void manual_add_student(vector<Student>& students, bool iiit_mode) {
     if (students.empty()) {
         cout << "Note: Loading existing students.csv first to ensure consistency...\n";
@@ -368,11 +386,11 @@ void manual_add_student(vector<Student>& students, bool iiit_mode) {
     }
 
     cout << "\n--- Manual Student Creation ---\n";
-    string name, branch, roll_str, course_str, grade_str;
+    cout << "Please enter ALL student details.\n";
+
+    string name, branch, roll_str, year_str;
     
-    cout << "Name: "; getline(cin, name);
-    cout << "Branch: "; getline(cin, branch);
-    
+    // 1. Roll Number
     RollID r;
     if (iiit_mode) {
         cout << "Roll No (Integer, e.g., 2019001): "; getline(cin, roll_str);
@@ -382,29 +400,102 @@ void manual_add_student(vector<Student>& students, bool iiit_mode) {
         r = roll_str;
     }
 
-    Student s(r, name, branch, 2023);
+    // 2. Basic Info
+    cout << "Name: "; getline(cin, name);
+    cout << "Branch: "; getline(cin, branch);
+    cout << "Start Year (e.g. 2023): "; getline(cin, year_str);
+    int year = 2023;
+    try { year = stoi(year_str); } catch(...) {}
+
+    Student s(r, name, branch, year);
     
-    CourseID c;
-    double g = 0.0;
-    
-    if (iiit_mode) {
-        cout << "Course Code (String, e.g., CS101): "; getline(cin, course_str);
-        c = course_str;
-    } else {
-        cout << "Course Code (Integer, e.g., 101): "; getline(cin, course_str);
-        try { c = stoi(course_str); } catch(...) { c = 0; }
+    // 3. Current Courses Loop
+    cout << "--- Adding CURRENT Courses (Type 'done' to finish) ---\n";
+    while(true) {
+        string course_str, grade_str;
+        if (iiit_mode) cout << "Current Course Code (String, e.g. CS101) [or 'done']: ";
+        else cout << "Current Course Code (Integer, e.g. 101) [or 'done']: ";
+        
+        getline(cin, course_str);
+        if (trim(course_str) == "done" || trim(course_str) == "") break;
+
+        CourseID c;
+        if (iiit_mode) c = course_str;
+        else {
+             try { c = stoi(course_str); } catch(...) { 
+                 // Fallback if user types string in IIT mode
+                 c = course_str; 
+             }
+        }
+
+        cout << "  Grade (e.g. 9.0): "; getline(cin, grade_str);
+        double g = 0.0;
+        try { g = stod(grade_str); } catch(...) {}
+        s.add_course(c, g, true); // true = current
+    }
+
+    // 4. Previous Courses Loop
+    cout << "--- Adding PREVIOUS Courses (Type 'done' to finish) ---\n";
+    while(true) {
+        string course_str, grade_str;
+        if (iiit_mode) cout << "Previous Course Code (String) [or 'done']: ";
+        else cout << "Previous Course Code (Integer) [or 'done']: ";
+        
+        getline(cin, course_str);
+        if (trim(course_str) == "done" || trim(course_str) == "") break;
+
+        CourseID c;
+        if (iiit_mode) c = course_str;
+        else {
+             try { c = stoi(course_str); } catch(...) { c = course_str; }
+        }
+
+        cout << "  Grade (e.g. 8.5): "; getline(cin, grade_str);
+        double g = 0.0;
+        try { g = stod(grade_str); } catch(...) {}
+        s.add_course(c, g, false); // false = previous
     }
     
-    cout << "Grade (e.g. 9.0): "; getline(cin, grade_str);
-    try { g = stod(grade_str); } catch(...) { g = 0.0; }
-    
-    s.add_course(c, g);
     students.push_back(s); 
-    
-    // PERSIST TO FILE IMMEDIATELY
     append_student_to_csv(s, "students.csv");
     
     cout << "Student added to memory and appended to students.csv!\n";
+    wait_for_enter();
+}
+
+// Delete student
+void delete_student(vector<Student>& students) {
+    if (students.empty()) {
+        cout << "Loading data to ensure accurate deletion...\n";
+        load_csv("students.csv", students);
+    }
+
+    cout << "\n--- DELETE STUDENT ---\n";
+    cout << "Enter Roll Number to Delete: ";
+    cout.flush();
+    string roll_in; 
+    getline(cin, roll_in);
+    roll_in = trim(roll_in);
+
+    auto it = find_if(students.begin(), students.end(), [&](const Student& s) {
+        string s_roll = to_string_variant(s.get_roll());
+        return s_roll == roll_in;
+    });
+
+    if (it != students.end()) {
+        cout << "Found student: " << it->brief() << "\n";
+        cout << "Are you sure you want to PERMANENTLY delete? (y/n): ";
+        string confirm; getline(cin, confirm);
+        if (trim(confirm) == "y" || trim(confirm) == "Y") {
+            students.erase(it);
+            save_all_students_to_csv(students, "students.csv");
+            cout << "Student deleted and file updated.\n";
+        } else {
+            cout << "Deletion cancelled.\n";
+        }
+    } else {
+        cout << "Student with roll number '" << roll_in << "' not found.\n";
+    }
     wait_for_enter();
 }
 
@@ -413,6 +504,7 @@ int main(int argc, char **argv) {
     
     string csv_file = "students.csv";
     vector<Student> students;
+    // Indices
     vector<size_t> input_order;
     vector<size_t> sorted_indices;
     CourseIndex cidx;
@@ -434,13 +526,9 @@ int main(int argc, char **argv) {
         if (choice == 0) { cout << "\nExiting system. Goodbye!\n"; break; }
 
         switch (choice) {
-            // Question 1 & 2
-            case 1: 
-                manual_add_student(students, true); // IIIT: int roll, string course
-                break;
-            case 2:
-                manual_add_student(students, false); // IIT: string roll, int course
-                break;
+            case 1: manual_add_student(students, true); break;
+            case 2: manual_add_student(students, false); break;
+            
             case 3: {
                 if (students.empty()) {
                     cout << "Loading data from CSV first...\n";
@@ -458,12 +546,11 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            // Question 3
             case 4: {
                 cout << "Generating 3000 records via gen_students...\n";
                 int ret = system("./gen_students 3000");
-                if (ret != 0) cout << "Error running gen_students. Make sure it is compiled.\n";
-                else cout << "Generation complete. File: students.csv\n";
+                if (ret != 0) cout << "Error running gen_students.\n";
+                else cout << "Generation complete.\n";
                 wait_for_enter();
                 break;
             }
@@ -472,13 +559,6 @@ int main(int argc, char **argv) {
                 students.clear();
                 size_t n = load_csv(csv_file, students);
                 cout << "Loaded " << n << " records.\n";
-                
-                input_order.resize(students.size());
-                iota(input_order.begin(), input_order.end(), 0);
-                sorted_indices.resize(students.size());
-                iota(sorted_indices.begin(), sorted_indices.end(), 0);
-                sorted = false;
-                indexed = false;
                 wait_for_enter();
                 break;
             }
@@ -501,11 +581,8 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            // Question 4
             case 7: {
                 if (students.empty()) { cout << "No data loaded.\n"; wait_for_enter(); break; }
-                
-                // Ensure indices match data size
                 input_order.resize(students.size());
                 iota(input_order.begin(), input_order.end(), 0);
 
@@ -533,7 +610,6 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            // Question 5
             case 9: {
                 if (students.empty()) { cout << "Load data first.\n"; wait_for_enter(); break; }
                 if (!indexed) { cidx.build_from(students); indexed = true; }
@@ -561,16 +637,14 @@ int main(int argc, char **argv) {
                 if (students.empty()) { cout << "Load data first.\n"; wait_for_enter(); break; }
                 if (!indexed) { cidx.build_from(students); indexed = true; }
                 
-                // --- Display available courses ---
                 cout << "\n--- Available Courses ---\n";
                 auto all_courses = cidx.get_all_courses();
                 for(size_t i=0; i<all_courses.size(); ++i) {
                     cout << to_string_variant(all_courses[i]);
                     if (i < all_courses.size() - 1) cout << ", ";
-                    if ((i+1) % 8 == 0) cout << "\n"; // Break line every 8 courses for readability
+                    if ((i+1) % 8 == 0) cout << "\n"; 
                 }
                 cout << "\n-------------------------\n";
-                // ---------------------------------
 
                 cout << "Enter course ID: "; cout.flush();
                 string c_in; getline(cin, c_in);
@@ -595,29 +669,11 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            // Demo All
             case 11: {
-                cout << "\n--- RUNNING FULL DEMO ---\n";
-                cout << "1. Generating Data...\n"; system("./gen_students 50");
-                cout << "2. Loading Data...\n";
-                students.clear(); load_csv("students.csv", students);
-                
-                input_order.resize(students.size()); iota(input_order.begin(), input_order.end(), 0);
-                sorted_indices.resize(students.size()); iota(sorted_indices.begin(), sorted_indices.end(), 0);
-                
-                cout << "3. Parallel Sorting...\n";
-                ThreadTimer t1, t2;
-                parallel_sort_indices(sorted_indices, students, t1, t2);
-                cout << "   Sort complete.\n";
-                
-                cout << "4. Building Index...\n";
-                cidx.build_from(students); indexed = true; sorted = true;
-                
-                cout << "5. Showing First 3 Sorted:\n";
-                for(size_t i=0; i<3 && i<students.size(); ++i) cout << "   " << students[sorted_indices[i]].get_name() << "\n";
-                
-                cout << "\nDemo Complete.\n";
-                wait_for_enter();
+                delete_student(students);
+                // Invalidate indices after delete
+                sorted = false;
+                indexed = false;
                 break;
             }
 
